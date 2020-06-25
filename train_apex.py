@@ -134,13 +134,6 @@ def main(opt):
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
 
-        # save_checkpoint({
-        #     "epoch": epoch + 1,
-        #     "state_dict": model.state_dict(),
-        #     "best_acc1": best_acc1,
-        #     "optimizer": optimizer.state_dict(),
-        # }, is_best, opt.saved_path)
-
         save_checkpoint({
             "epoch": epoch + 1,
             "state_dict": model.state_dict(),
