@@ -54,6 +54,10 @@ def adjust_learning_rate(optimizer, epoch, lr):
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
+def collate_fn(batch):
+    batch = list(filter(lambda x: x is not None, batch))
+    return torch.utils.data.dataloader.default_collate(batch)
+
 def main(opt):
     num_gpus = 1
     if torch.cuda.is_available():
@@ -73,10 +77,10 @@ def main(opt):
                    "num_workers": 12}
 
     training_set = Imagenet(root_dir=opt.data_path, mode="train")
-    training_generator = DataLoader(training_set, **training_params)
+    training_generator = DataLoader(training_set, collate_fn=collate_fn, **training_params)
 
     test_set = Imagenet(root_dir=opt.data_path, mode="val")
-    test_generator = DataLoader(test_set, **test_params)
+    test_generator = DataLoader(test_set, collate_fn=collate_fn, **test_params)
 
     if os.path.isdir(opt.log_path):
         shutil.rmtree(opt.log_path)

@@ -45,8 +45,11 @@ class Imagenet(Dataset):
         return len(self.images)
 
     def __getitem__(self, index):
-        img = cv2.imread(self.images[index]["image"])
-        img = img.astype(np.float32, copy=False)
-        img = self.transform(img)
-        category = self.images[index]["category"]
+        try:
+            img = cv2.imread(self.images[index]["image"])
+            img = img.astype(np.float32, copy=False)
+            img = self.transform(img)
+            category = self.images[index]["category"]
+        except:
+            return None
         return img, category
