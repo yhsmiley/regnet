@@ -17,7 +17,8 @@ class Imagenet(Dataset):
         self.load_categories()
 
     def load_categories(self):
-        self.raw_category_ids = sorted(file_ for file_ in os.listdir(self.data_dir) if re.match(r"^n[0-9]+$", file_))
+        # self.raw_category_ids = sorted(file_ for file_ in os.listdir(self.data_dir) if re.match(r"^n[0-9]+$", file_))
+        self.raw_category_ids = sorted(file_ for file_ in os.listdir(self.data_dir))
         self.fine_category_ids = {value: key for key, value in enumerate(self.raw_category_ids)}
         self.images = []
         for raw_id in self.raw_category_ids:

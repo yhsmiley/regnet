@@ -1,4 +1,5 @@
+opencv-python==4.2.0.34
+pthflops==0.2.2
+tensorboard==2.2.2
 torch==1.4.0
-opencv==4.2
-pthflops
-torchsummary
+torchsummary==1.4.0

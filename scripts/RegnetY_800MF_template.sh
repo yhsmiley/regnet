@@ -1,8 +1,5 @@
 #!/bin/bash
-python3 train.py --data_path /dataset \
-				--epochs 100 \
-				--batch_size 64 \
-				--bottleneck_ratio 1 \
+python train.py --bottleneck_ratio 1 \
                 --group_width 16 \
                 --initial_width 56 \
                 --slope 39 \

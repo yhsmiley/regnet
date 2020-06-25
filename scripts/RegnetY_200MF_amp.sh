@@ -1,7 +1,7 @@
 #!/bin/bash
-python3 train.py --data_path /dataset \
+python3 train_apex.py --data_path /dataset \
                 --epochs 100 \
-                --batch_size 32 \
+                --batch_size 256 \
                 --bottleneck_ratio 1 \
                 --group_width 8 \
                 --initial_width 24 \

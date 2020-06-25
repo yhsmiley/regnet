@@ -20,6 +20,8 @@ from src.regnet import RegNetY
 from src.dataset import Imagenet
 from src.config import TRAIN_IMAGE_SIZE
 
+from apex import amp
+
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -95,13 +97,20 @@ def main(opt):
     count_ops(model, dummy_input, verbose=False)
     summary(model, (3, TRAIN_IMAGE_SIZE, TRAIN_IMAGE_SIZE), device="cpu")
 
-    if torch.cuda.is_available():
-        model = nn.DataParallel(model)
-        model = model.cuda()
-
     criterion = nn.CrossEntropyLoss()
     optimizer = SGD(model.parameters(), lr=opt.lr, momentum=opt.momentum, weight_decay=opt.weight_decay, nesterov=True)
     best_acc1 = 0
+
+    if torch.cuda.is_available():
+        model = model.cuda()
+
+    # Apex Initialization
+    opt_level = 'O2' # (Official Mixed Precision recipe, recommended for typical use)
+    model, optimizer = amp.initialize(model, optimizer, opt_level=opt_level)
+
+    if torch.cuda.is_available():
+        model = nn.DataParallel(model)
+
     model.train()
 
     restore_epoch = 0
@@ -109,6 +118,7 @@ def main(opt):
         checkpoint = torch.load(opt.restore_model)
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint['optimizer'])
+        amp.load_state_dict(checkpoint['amp'])
         restore_epoch = checkpoint['epoch']
 
     for epoch in range(opt.epochs):
@@ -120,11 +130,19 @@ def main(opt):
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
 
+        # save_checkpoint({
+        #     "epoch": epoch + 1,
+        #     "state_dict": model.state_dict(),
+        #     "best_acc1": best_acc1,
+        #     "optimizer": optimizer.state_dict(),
+        # }, is_best, opt.saved_path)
+
         save_checkpoint({
             "epoch": epoch + 1,
             "state_dict": model.state_dict(),
             "best_acc1": best_acc1,
             "optimizer": optimizer.state_dict(),
+            "amp": amp.state_dict(),
         }, is_best, opt.saved_path)
 
 
@@ -163,7 +181,9 @@ def train(train_loader, model, criterion, optimizer, epoch, writer):
         writer.add_scalar('Train/Top5_acc', top5.avg, epoch * num_iter_per_epoch + i)
 
         optimizer.zero_grad()
-        loss.backward()
+        # loss.backward()
+        with amp.scale_loss(loss, optimizer) as scaled_loss:
+            scaled_loss.backward()
         optimizer.step()
 
         # measure elapsed time
@@ -220,11 +240,11 @@ def validate(val_loader, model, criterion, epoch, writer):
     return top1.avg
 
 
-def save_checkpoint(state, is_best, saved_path, filename="checkpoint.pth.tar"):
+def save_checkpoint(state, is_best, saved_path, filename="amp_checkpoint.pth.tar"):
     file_path = os.path.join(saved_path, filename)
     torch.save(state, file_path)
     if is_best:
-        shutil.copyfile(file_path, os.path.join(saved_path, "best_checkpoint.pth.tar"))
+        shutil.copyfile(file_path, os.path.join(saved_path, "best_amp_checkpoint.pth.tar"))
 
 
 class AverageMeter(object):
