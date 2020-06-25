@@ -21,6 +21,7 @@ def get_args():
 
     parser.add_argument("-d", "--test_data_path", type=str, default="test", help="the root folder of test images")
     parser.add_argument("--model_path", type=str, help="trained model weights path")
+    parser.add_argument("-b", "--batch_size", default=32, type=int)
 
     # These default parameters are for RegnetY 200MF
     parser.add_argument("--bottleneck_ratio", default=1, type=int)
@@ -52,7 +53,7 @@ def preprocess(img):
     img = color_norm(img, [0.406, 0.456, 0.485], [0.225, 0.224, 0.229])
     return img
 
-def evaluate(opt, batch_size=1):
+def evaluate(opt):
     filenames = os.listdir(opt.test_data_path)
 
     model = RegNetY(opt.initial_width, opt.slope, opt.quantized_param, opt.network_depth, opt.bottleneck_ratio,
@@ -78,10 +79,10 @@ def evaluate(opt, batch_size=1):
 
     batches = []
     batch_filenames = []
-    for i in range(0, len(images), batch_size):
-        these_imgs = images[i:i+batch_size]
+    for i in range(0, len(images), opt.batch_size):
+        these_imgs = images[i:i+opt.batch_size]
         batches.append(these_imgs)
-        these_filenames = filenames[i:i+batch_size]
+        these_filenames = filenames[i:i+opt.batch_size]
         batch_filenames.append(these_filenames)
     
     softmax = Softmax(1)
@@ -113,4 +114,4 @@ def evaluate(opt, batch_size=1):
 
 if __name__ == "__main__":
     opt = get_args()
-    evaluate(opt, batch_size=10)
+    evaluate(opt)
