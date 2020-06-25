@@ -7,9 +7,8 @@ import re
 import cv2
 import numpy as np
 from PIL import Image
-from src.config import *
 from torch.utils.data import Dataset
-from src.transforms_fixres import get_transforms, Lighting
+from src.transforms_fixres import get_transforms
 
 
 class Imagenet(Dataset):
@@ -37,18 +36,12 @@ class Imagenet(Dataset):
                 transformation = transf['val_train']
             else:
                 transformation = transf['train']
-            pil_img = Image.fromarray(img)
-            img_tensor = transformation(pil_img)
-            img_tensor = img_tensor / 255
-            lighting_tensor = Lighting(0.1, np.array(EIGENVALUES), np.array(EIGENVECTORS))
-            img_tensor = lighting_tensor(img_tensor)
-            img = img_tensor.cpu().numpy()
         else:
             transformation = transf['val']
-            pil_img = Image.fromarray(img)
-            img_tensor = transformation(pil_img)
-            img_tensor = img_tensor / 255
-            img = img_tensor.cpu().numpy()
+
+        pil_img = Image.fromarray(img)
+        img_tensor = transformation(pil_img)
+        img = img_tensor.cpu().numpy()
 
         return img
 
@@ -56,11 +49,11 @@ class Imagenet(Dataset):
         return len(self.images)
 
     def __getitem__(self, index):
-        # try:
-        img = cv2.imread(self.images[index]["image"])
-        img = img.astype(np.uint8, copy=False)
-        img = self.transform(img)
-        category = self.images[index]["category"]
-        # except:
-        #     return None
+        try:
+            img = cv2.imread(self.images[index]["image"])
+            img = img.astype(np.uint8, copy=False)
+            img = self.transform(img)
+            category = self.images[index]["category"]
+        except:
+            return None
         return img, category

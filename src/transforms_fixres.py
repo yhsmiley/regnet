@@ -125,6 +125,7 @@ def get_transforms(kind='full', crop=True, need=('train', 'val')):
                 transforms.RandomResizedCrop(TRAIN_IMAGE_SIZE),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
+                Lighting(0.1, np.array(EIGENVALUES), np.array(EIGENVECTORS)),
                 transforms.Normalize(mean, std),
             ])
         elif kind == 'full':
@@ -133,9 +134,9 @@ def get_transforms(kind='full', crop=True, need=('train', 'val')):
                 transforms.RandomHorizontalFlip(),
                 transforms.ColorJitter(0.3, 0.3, 0.3),
                 transforms.ToTensor(),
+                Lighting(0.1, np.array(EIGENVALUES), np.array(EIGENVECTORS)),
                 transforms.Normalize(mean, std),
             ])
-
         else:
             raise ValueError('Transforms kind {} unknown'.format(kind))
     if 'val' in need:

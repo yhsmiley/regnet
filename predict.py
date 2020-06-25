@@ -93,15 +93,12 @@ def evaluate(opt):
             batch = batch.float().cuda()
             logits = model(batch)
             outputs = softmax(logits)
-            # print('softmax vector: {}'.format(outputs))
             _, preds = torch.max(outputs, 1)
             output_classes = preds.data.cpu().numpy()
-            # print('output_classes: {}'.format(output_classes))
 
             # zero pad the labels
             output_classes=["%02d" % x for x in output_classes]
 
-            # print('batch_filenames: {}'.format(batch_filenames[i]))
             for filename, output_cls in zip(batch_filenames[i], output_classes):
                 output_dict[filename] = output_cls
     # print('output dict: {}'.format(output_dict))
