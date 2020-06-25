@@ -1,5 +1,5 @@
 #!/bin/bash
-python3 train_apex.py --data_path /dataset \
+python3 train.py --data_path /dataset \
                 --epochs 100 \
                 --batch_size 128 \
                 --bottleneck_ratio 1 \
@@ -9,4 +9,5 @@ python3 train_apex.py --data_path /dataset \
                 --quantized_param 2.4 \
                 --network_depth 14 \
                 --stride 2 \
-                --se_ratio 4
+                --se_ratio 4 \
+                --apex

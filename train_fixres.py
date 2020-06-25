@@ -36,6 +36,7 @@ def get_args():
     parser.add_argument("--log_path", type=str, default="tensorboard/signatrix_regnet_imagenet")
     parser.add_argument("--saved_path", type=str, default="trained_models")
     parser.add_argument("--restore_model", type=str)
+    parser.add_argument('--apex', action='store_true', help='use apex or not')
 
     # These default parameters are for RegnetY 200MF
     parser.add_argument("--bottleneck_ratio", default=1, type=int)
@@ -108,9 +109,8 @@ def main(opt):
     if torch.cuda.is_available():
         model = model.cuda()
 
-    # Apex Initialization
-    opt_level = 'O2' # (Official Mixed Precision recipe, recommended for typical use)
-    model, optimizer = amp.initialize(model, optimizer, opt_level=opt_level)
+    if opt.apex:
+        model, optimizer = amp.initialize(model, optimizer, opt_level='O2')
 
     if torch.cuda.is_available():
         model = nn.DataParallel(model)
@@ -122,28 +122,37 @@ def main(opt):
         checkpoint = torch.load(opt.restore_model)
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        amp.load_state_dict(checkpoint['amp'])
         restore_epoch = checkpoint['epoch']
+        if opt.apex:
+            amp.load_state_dict(checkpoint['amp'])
 
     for epoch in range(opt.epochs):
         epoch = epoch + restore_epoch
         adjust_learning_rate(optimizer, epoch, opt.lr)
-        train(training_generator, model, criterion, optimizer, epoch, writer)
+        train(training_generator, model, criterion, optimizer, epoch, writer, opt)
         acc1 = validate(test_generator, model, criterion, epoch, writer)
 
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
 
-        save_checkpoint({
-            "epoch": epoch + 1,
-            "state_dict": model.state_dict(),
-            "best_acc1": best_acc1,
-            "optimizer": optimizer.state_dict(),
-            "amp": amp.state_dict(),
-        }, is_best, opt.saved_path)
+        if opt.apex:
+            save_checkpoint({
+                "epoch": epoch + 1,
+                "state_dict": model.state_dict(),
+                "best_acc1": best_acc1,
+                "optimizer": optimizer.state_dict(),
+                "amp": amp.state_dict(),
+            }, is_best, opt.saved_path)
+        else:
+            save_checkpoint({
+                "epoch": epoch + 1,
+                "state_dict": model.state_dict(),
+                "best_acc1": best_acc1,
+                "optimizer": optimizer.state_dict(),
+            }, is_best, opt.saved_path)
 
 
-def train(train_loader, model, criterion, optimizer, epoch, writer):
+def train(train_loader, model, criterion, optimizer, epoch, writer, opt):
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
     losses = AverageMeter("Loss", ":.4e")
@@ -178,9 +187,11 @@ def train(train_loader, model, criterion, optimizer, epoch, writer):
         writer.add_scalar('Train/Top5_acc', top5.avg, epoch * num_iter_per_epoch + i)
 
         optimizer.zero_grad()
-        # loss.backward()
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
+        if opt.apex:
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
         optimizer.step()
 
         # measure elapsed time
