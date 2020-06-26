@@ -17,10 +17,13 @@ from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
 
 from src.regnet import RegNetY
-from src.dataset_fixres import Imagenet
 from src.config import TRAIN_IMAGE_SIZE
 
-from apex import amp
+from collections import OrderedDict
+import torch.backends.cudnn as cudnn
+
+from sklearn.model_selection import StratifiedKFold
+from torch.utils.data import SubsetRandomSampler
 
 
 def get_args():
@@ -37,6 +40,8 @@ def get_args():
     parser.add_argument("--saved_path", type=str, default="trained_models")
     parser.add_argument("--restore_model", type=str)
     parser.add_argument('--apex', action='store_true', help='use apex or not')
+    parser.add_argument('--fixres', action='store_true', help='use FixRes transformations for fine-tuning')
+    parser.add_argument("--n_fold", default=1, type=int)
 
     # These default parameters are for RegnetY 200MF
     parser.add_argument("--bottleneck_ratio", default=1, type=int)
@@ -61,6 +66,19 @@ def collate_fn(batch):
     batch = list(filter(lambda x: x is not None, batch))
     return torch.utils.data.dataloader.default_collate(batch)
 
+# only if dont want to use nn.DataParallel
+# def rename_state_dict(checkpoint):
+#     # remove 'module.'
+#     new_state_dict = OrderedDict()
+#     for key, value in checkpoint['state_dict'].items():
+#         if key.startswith('module.'):
+#             new_key = key.split('module.')[1]
+#             new_state_dict[new_key] = value
+#         else:
+#             new_state_dict[key] = value
+#     checkpoint['state_dict'] = new_state_dict
+#     return checkpoint
+
 def main(opt):
     num_gpus = 1
     if torch.cuda.is_available():
@@ -69,21 +87,20 @@ def main(opt):
     else:
         torch.manual_seed(123)
 
+    cudnn.enabled = True
+    cudnn.benchmark = True
+
     training_params = {"batch_size": opt.batch_size * num_gpus,
                        "shuffle": True,
                        "drop_last": True,
-                       "num_workers": 12}
+                       "num_workers": 6}
 
     test_params = {"batch_size": opt.batch_size//10,
                    "shuffle": False,
                    "drop_last": False,
-                   "num_workers": 12}
+                   "num_workers": 6}
 
-    training_set = Imagenet(root_dir=opt.data_path, mode="train")
-    training_generator = DataLoader(training_set, collate_fn=collate_fn, **training_params)
-
-    test_set = Imagenet(root_dir=opt.data_path, mode="val")
-    test_generator = DataLoader(test_set, collate_fn=collate_fn, **test_params)
+    all_train_set = Imagenet(root_dir=opt.data_path, mode="train")
 
     if os.path.isdir(opt.log_path):
         shutil.rmtree(opt.log_path)
@@ -115,41 +132,50 @@ def main(opt):
     if torch.cuda.is_available():
         model = nn.DataParallel(model)
 
-    model.train()
-
     restore_epoch = 0
     if opt.restore_model:
         checkpoint = torch.load(opt.restore_model)
+        # checkpoint = rename_state_dict(checkpoint)
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint['optimizer'])
         restore_epoch = checkpoint['epoch']
         if opt.apex:
             amp.load_state_dict(checkpoint['amp'])
 
-    for epoch in range(opt.epochs):
-        epoch = epoch + restore_epoch
-        adjust_learning_rate(optimizer, epoch, opt.lr)
-        train(training_generator, model, criterion, optimizer, epoch, writer, opt)
-        acc1 = validate(test_generator, model, criterion, epoch, writer)
+    kfold = StratifiedKFold(n_splits=opt.n_fold, shuffle=True)
+    for i, (train_idx, val_idx) in enumerate(kfold.split(all_train_set, all_train_set.targets)):
+        print('which fold: {}'.format(i))
 
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
+        train_set = torch.utils.data.Subset(all_train_set, train_idx)
+        training_generator = DataLoader(train_set, collate_fn=collate_fn, **training_params)
 
-        if opt.apex:
-            save_checkpoint({
-                "epoch": epoch + 1,
-                "state_dict": model.state_dict(),
-                "best_acc1": best_acc1,
-                "optimizer": optimizer.state_dict(),
-                "amp": amp.state_dict(),
-            }, is_best, opt.saved_path)
-        else:
-            save_checkpoint({
-                "epoch": epoch + 1,
-                "state_dict": model.state_dict(),
-                "best_acc1": best_acc1,
-                "optimizer": optimizer.state_dict(),
-            }, is_best, opt.saved_path)
+        val_set = torch.utils.data.Subset(all_train_set, val_idx)
+        val_generator = DataLoader(val_set, collate_fn=collate_fn, **test_params)
+
+        for epoch in range(opt.epochs):
+            epoch = restore_epoch + (opt.epochs*i) + epoch
+            adjust_learning_rate(optimizer, epoch, opt.lr)
+            train(training_generator, model, criterion, optimizer, epoch, writer, opt)
+            acc1 = validate(val_generator, model, criterion, epoch, writer)
+
+            is_best = acc1 > best_acc1
+            best_acc1 = max(acc1, best_acc1)
+
+            if opt.apex:
+                save_checkpoint({
+                    "epoch": epoch + 1,
+                    "state_dict": model.state_dict(),
+                    "best_acc1": best_acc1,
+                    "optimizer": optimizer.state_dict(),
+                    "amp": amp.state_dict(),
+                }, is_best, opt.saved_path, filename="apex_checkpoint.pth.tar")
+            else:
+                save_checkpoint({
+                    "epoch": epoch + 1,
+                    "state_dict": model.state_dict(),
+                    "best_acc1": best_acc1,
+                    "optimizer": optimizer.state_dict(),
+                }, is_best, opt.saved_path)
 
 
 def train(train_loader, model, criterion, optimizer, epoch, writer, opt):
@@ -248,11 +274,12 @@ def validate(val_loader, model, criterion, epoch, writer):
     return top1.avg
 
 
-def save_checkpoint(state, is_best, saved_path, filename="amp_checkpoint.pth.tar"):
+def save_checkpoint(state, is_best, saved_path, filename="checkpoint.pth.tar"):
     file_path = os.path.join(saved_path, filename)
     torch.save(state, file_path)
     if is_best:
-        shutil.copyfile(file_path, os.path.join(saved_path, "best_amp_checkpoint.pth.tar"))
+        best_filename = 'best_' + filename
+        shutil.copyfile(file_path, os.path.join(saved_path, best_filename))
 
 
 class AverageMeter(object):
@@ -316,4 +343,13 @@ def accuracy(output, target, topk=(1,)):
 
 if __name__ == "__main__":
     opt = get_args()
+
+    if opt.apex:
+        from apex import amp
+
+    if opt.fixres:
+        from src.dataset_fixres import Imagenet
+    else:
+        from src.dataset import Imagenet
+
     main(opt)

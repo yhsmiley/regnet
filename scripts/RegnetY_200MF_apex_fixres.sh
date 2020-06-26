@@ -1,5 +1,5 @@
 #!/bin/bash
-python3 train_fixres.py --data_path /dataset \
+python3 train.py --data_path /dataset \
                 --epochs 100 \
                 --batch_size 256 \
                 --bottleneck_ratio 1 \
@@ -10,4 +10,5 @@ python3 train_fixres.py --data_path /dataset \
                 --network_depth 13 \
                 --stride 2 \
                 --se_ratio 4 \
-                --apex
+                --apex \
+                --fixres

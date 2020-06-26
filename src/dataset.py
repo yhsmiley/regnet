@@ -21,10 +21,12 @@ class Imagenet(Dataset):
         self.raw_category_ids = sorted(file_ for file_ in os.listdir(self.data_dir))
         self.fine_category_ids = {value: key for key, value in enumerate(self.raw_category_ids)}
         self.images = []
+        self.targets = []
         for raw_id in self.raw_category_ids:
             fine_id = self.fine_category_ids[raw_id]
             dir = os.path.join(self.data_dir, raw_id)
             self.images.extend([{"image": os.path.join(dir, image), "category": fine_id} for image in os.listdir(dir)])
+            self.targets.extend([fine_id for image in os.listdir(dir)])
 
     def transform(self, img):
         if self.mode == "train":

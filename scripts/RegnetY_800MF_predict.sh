@@ -1,7 +1,7 @@
 #!/bin/bash
 python3 predict.py --test_data_path /dataset/test \
-                --model_path /regnet/trained_models/best_amp_checkpoint.pth.tar \
-                --batch_size 10 \
+                --model_path /regnet/trained_models/best_checkpoint.pth.tar \
+                --batch_size 16 \
                 --bottleneck_ratio 1 \
                 --group_width 16 \
                 --initial_width 56 \
