@@ -167,6 +167,23 @@ def main(opt):
                 "optimizer": optimizer.state_dict(),
             }, is_best, opt.saved_path)
 
+        if (epoch+1) % 10 == 0:
+            if opt.apex:
+                save_checkpoint({
+                    "epoch": epoch + 1,
+                    "state_dict": model.state_dict(),
+                    "best_acc1": best_acc1,
+                    "optimizer": optimizer.state_dict(),
+                    "amp": amp.state_dict(),
+                }, False, opt.saved_path, filename="ckpt/apex_checkpoint_epoch{}.pth.tar".format(epoch+1))
+            else:
+                save_checkpoint({
+                    "epoch": epoch + 1,
+                    "state_dict": model.state_dict(),
+                    "best_acc1": best_acc1,
+                    "optimizer": optimizer.state_dict(),
+                }, False, opt.saved_path, filename="ckpt/checkpoint_epoch{}.pth.tar".format(epoch+1))
+
 
 def train(train_loader, model, criterion, optimizer, epoch, writer, opt):
     batch_time = AverageMeter("Time", ":6.3f")
