@@ -1,26 +1,23 @@
-"""
-@author: Signatrix GmbH
-Implementation of paradigm described in paper: Designing Network Design Spaces published by Facebook AI Research (FAIR)
-"""
-import argparse
 import os
-import shutil
 import time
+import shutil
+import argparse
 from pthflops import count_ops
 from torchsummary import summary
+from collections import OrderedDict, Counter
 
 import torch
 import torch.nn as nn
 import torch.nn.parallel
-from torch.utils.data import DataLoader
 from torch.optim import SGD
+import torch.backends.cudnn as cudnn
+from torchvision.datasets import ImageFolder
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from src.regnet import RegNetY
 from src.config import TRAIN_IMAGE_SIZE
-
-from collections import OrderedDict
-import torch.backends.cudnn as cudnn
+from src.transforms import *
 
 
 def get_args():
@@ -76,18 +73,13 @@ def collate_fn(batch):
 #     return checkpoint
 
 def main(opt):
-    num_gpus = 1
-    if torch.cuda.is_available():
-        num_gpus = torch.cuda.device_count()
-        torch.cuda.manual_seed(123)
-    else:
-        torch.manual_seed(123)
+    num_gpus = torch.cuda.device_count()
+    torch.cuda.manual_seed(123)
 
     cudnn.enabled = True
     cudnn.benchmark = True
 
     training_params = {"batch_size": opt.batch_size * num_gpus,
-                       "shuffle": True,
                        "drop_last": True,
                        "num_workers": 6}
 
@@ -96,10 +88,32 @@ def main(opt):
                    "drop_last": False,
                    "num_workers": 6}
 
-    training_set = Imagenet(root_dir=opt.data_path, mode="train")
-    training_generator = DataLoader(training_set, collate_fn=collate_fn, **training_params)
+    # training_set = Imagenet(root_dir=opt.data_path, mode="train")
+    # training_generator = DataLoader(training_set, collate_fn=collate_fn, **training_params)
 
-    test_set = Imagenet(root_dir=opt.data_path, mode="val")
+    # test_set = Imagenet(root_dir=opt.data_path, mode="val")
+    # test_generator = DataLoader(test_set, collate_fn=collate_fn, **test_params)
+
+    if opt.fixres:
+        transformations = get_transforms_fixres(kind='full', crop=True, finetune=True)
+    else:
+        transformations = get_transforms()
+
+    # training dataloader
+    train_set = ImageFolder(root=os.path.join(opt.data_path, 'train'), transform=transformations['train'])
+    # for weighted sampling
+    class_count = dict(Counter(target for target in train_set.targets if target != len(train_set.classes)))
+    class_count = dict(sorted(class_count.items()))
+    class_count = list(class_count.values())
+    class_weights = [len(train_set)/cls_count for cls_count in class_count]
+    class_weights = torch.FloatTensor(class_weights)
+    print('class weights: {}'.format(class_weights))
+    image_weights = class_weights[train_set.targets]
+    train_sampler = WeightedRandomSampler(image_weights, len(image_weights))
+    training_generator = DataLoader(train_set, collate_fn=collate_fn, sampler=train_sampler, **training_params)
+
+    # validation dataloader
+    test_set = ImageFolder(root=os.path.join(opt.data_path, 'val'), transform=transformations['val'])
     test_generator = DataLoader(test_set, collate_fn=collate_fn, **test_params)
 
     if os.path.isdir(opt.log_path):
@@ -123,14 +137,12 @@ def main(opt):
     optimizer = SGD(model.parameters(), lr=opt.lr, momentum=opt.momentum, weight_decay=opt.weight_decay, nesterov=True)
     best_acc1 = 0
 
-    if torch.cuda.is_available():
-        model = model.cuda()
+    model = model.cuda()
 
     if opt.apex:
         model, optimizer = amp.initialize(model, optimizer, opt_level='O2')
 
-    if torch.cuda.is_available():
-        model = nn.DataParallel(model)
+    model = nn.DataParallel(model)
 
     restore_epoch = 0
     if opt.restore_model:
@@ -201,9 +213,8 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, opt):
     for i, (images, target) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
-        if torch.cuda.is_available():
-            images = images.cuda()
-            target = target.cuda()
+        images = images.cuda()
+        target = target.cuda()
 
         # compute output
         output = model(images)
@@ -251,9 +262,8 @@ def validate(val_loader, model, criterion, epoch, writer):
     with torch.no_grad():
         end = time.time()
         for i, (images, target) in enumerate(val_loader):
-            if torch.cuda.is_available():
-                images = images.cuda()
-                target = target.cuda()
+            images = images.cuda()
+            target = target.cuda()
 
             # compute output
             output = model(images)
@@ -353,10 +363,5 @@ if __name__ == "__main__":
 
     if opt.apex:
         from apex import amp
-
-    if opt.fixres:
-        from src.dataset_fixres import Imagenet
-    else:
-        from src.dataset import Imagenet
 
     main(opt)

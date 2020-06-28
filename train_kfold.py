@@ -1,35 +1,26 @@
-"""
-@author: Signatrix GmbH
-Implementation of paradigm described in paper: Designing Network Design Spaces published by Facebook AI Research (FAIR)
-"""
-import argparse
 import os
-import shutil
 import time
+import shutil
+import argparse
 from pthflops import count_ops
 from torchsummary import summary
+from collections import OrderedDict
 
 import torch
 import torch.nn as nn
 import torch.nn.parallel
-from torch.utils.data import DataLoader
 from torch.optim import SGD
+import torch.backends.cudnn as cudnn
+from torchvision.datasets import ImageFolder
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader, SubsetRandomSampler, WeightedRandomSampler
 
+from src.transforms import *
 from src.regnet import RegNetY
 from src.config import TRAIN_IMAGE_SIZE
-
-from collections import OrderedDict
-import torch.backends.cudnn as cudnn
+from src.dataset_helpers import MyConcatDataset, MySubset, MapDataset
 
 from sklearn.model_selection import StratifiedKFold
-from torch.utils.data import SubsetRandomSampler, WeightedRandomSampler
-from torchvision.datasets import ImageFolder
-from src.dataset_map import MapDataset
-from src.dataset_subset import MySubset
-from src.dataset_concat import MyConcatDataset
-
-from src.transforms_kfold import *
 
 
 def get_args():
@@ -86,12 +77,8 @@ def collate_fn(batch):
 #     return checkpoint
 
 def main(opt):
-    num_gpus = 1
-    if torch.cuda.is_available():
-        num_gpus = torch.cuda.device_count()
-        torch.cuda.manual_seed(123)
-    else:
-        torch.manual_seed(123)
+    num_gpus = torch.cuda.device_count()
+    torch.cuda.manual_seed(123)
 
     cudnn.enabled = True
     cudnn.benchmark = True
@@ -134,14 +121,12 @@ def main(opt):
     optimizer = SGD(model.parameters(), lr=opt.lr, momentum=opt.momentum, weight_decay=opt.weight_decay, nesterov=True)
     best_acc1 = 0
 
-    if torch.cuda.is_available():
-        model = model.cuda()
+    model = model.cuda()
 
     if opt.apex:
         model, optimizer = amp.initialize(model, optimizer, opt_level='O2')
 
-    if torch.cuda.is_available():
-        model = nn.DataParallel(model)
+    model = nn.DataParallel(model)
 
     restore_epoch = 0
     if opt.restore_model:
@@ -227,9 +212,8 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, opt):
     for i, (images, target) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
-        if torch.cuda.is_available():
-            images = images.cuda()
-            target = target.cuda()
+        images = images.cuda()
+        target = target.cuda()
 
         # compute output
         output = model(images)
@@ -277,9 +261,8 @@ def validate(val_loader, model, criterion, epoch, writer):
     with torch.no_grad():
         end = time.time()
         for i, (images, target) in enumerate(val_loader):
-            if torch.cuda.is_available():
-                images = images.cuda()
-                target = target.cuda()
+            images = images.cuda()
+            target = target.cuda()
 
             # compute output
             output = model(images)

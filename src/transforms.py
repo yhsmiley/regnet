@@ -1,98 +1,182 @@
-import math
-import cv2
+import torch
+import numbers
 import numpy as np
+from PIL import Image
+from src.config import *
+from torchvision import transforms
+import torchvision.transforms.functional as F
 
 
-def color_norm(im, mean, std):
-    """Performs per-channel normalization (CHW format)."""
-    for i in range(im.shape[0]):
-        im[i] = im[i] - mean[i]
-        im[i] = im[i] / std[i]
-    return im
+class Resize(transforms.Resize):
+    """
+    Resize with a ``largest=False'' argument
+    allowing to resize to a common largest side without cropping
+    """
+    def __init__(self, size, largest=False, **kwargs):
+        super().__init__(size, **kwargs)
+        self.largest = largest
 
-
-def zero_pad(im, pad_size):
-    """Performs zero padding (CHW format)."""
-    pad_width = ((0, 0), (pad_size, pad_size), (pad_size, pad_size))
-    return np.pad(im, pad_width, mode="constant")
-
-
-def horizontal_flip(im, p, order="CHW"):
-    """Performs horizontal flip (CHW or HWC format)."""
-    assert order in ["CHW", "HWC"]
-    if np.random.uniform() < p:
-        if order == "CHW":
-            im = im[:, :, ::-1]
+    @staticmethod
+    def target_size(w, h, size, largest=False):
+        if h < w and largest:
+            w, h = size, int(size * h / w)
         else:
-            im = im[:, ::-1, :]
-    return im
+            w, h = int(size * w / h), size
+        size = (h, w)
+        return size
+
+    def __call__(self, img):
+        size = self.size
+        w, h = img.size
+        target_size = self.target_size(w, h, size, self.largest)
+        return F.resize(img, target_size, self.interpolation)
+
+    def __repr__(self):
+        r = super().__repr__()
+        return r[:-1] + ', largest={})'.format(self.largest)
 
 
-def random_crop(im, size, pad_size=0):
-    """Performs random crop (CHW format)."""
-    if pad_size > 0:
-        im = zero_pad(im=im, pad_size=pad_size)
-    h, w = im.shape[1:]
-    y = np.random.randint(0, h - size)
-    x = np.random.randint(0, w - size)
-    im_crop = im[:, y : (y + size), x : (x + size)]
-    assert im_crop.shape[1:] == (size, size)
-    return im_crop
+class CenterCrop(object):
+    """Crops the given PIL Image at the center.
+        Args:
+        size (sequence or int): Desired output size of the crop. If size is an
+        int instead of sequence like (h, w), a square crop (size, size) is
+        made.
+        """
+    def __init__(self, size):
+        if isinstance(size, numbers.Number):
+            self.size = (int(size), int(size))
+        else:
+            self.size = size
+
+    @staticmethod
+    def _is_pil_image(img):
+        return isinstance(img, Image.Image)
+
+    def crop(self, img, i, j, h, w):
+        """Crop the given PIL Image.
+            Args:
+            img (PIL Image): Image to be cropped.
+            i (int): i in (i,j) i.e coordinates of the upper left corner.
+            j (int): j in (i,j) i.e coordinates of the upper left corner.
+            h (int): Height of the cropped image.
+            w (int): Width of the cropped image.
+            Returns:
+            PIL Image: Cropped image.
+            """
+        if not self._is_pil_image(img):
+            raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+        
+        return img.crop((j, i, j + w, i + h))
+
+    def center_crop_new(self, img, output_size):
+        if isinstance(output_size, numbers.Number):
+            output_size = (int(output_size), int(output_size))
+        w, h = img.size
+        th, tw = output_size
+        i = int(round((h - th) / 2.))
+        j = int(round((w - tw) / 2.))
+        jit=0
+        if j > 0:
+            jit=np.random.randint(int(j+1))
+        val=np.random.randint(2)
+        scale=(1.0)*(val==0)+(-1.0)*(val==1)
+        return self.crop(img, i, int(j+scale*jit), th, tw)
+
+    def __call__(self, img):
+        """
+            Args:
+            img (PIL Image): Image to be cropped.
+            Returns:
+            PIL Image: Cropped image.
+            """
+        return self.center_crop_new(img, self.size)
+        
+    def __repr__(self):
+        return self.__class__.__name__ + '(size={0})'.format(self.size)
 
 
-def scale(size, im):
-    """Performs scaling (HWC format)."""
-    h, w = im.shape[:2]
-    if (w <= h and w == size) or (h <= w and h == size):
-        return im
-    h_new, w_new = size, size
-    if w < h:
-        h_new = int(math.floor((float(h) / w) * size))
+class Lighting(object):
+    """
+    PCA jitter transform on tensors
+    """
+    def __init__(self, alpha_std, eig_val, eig_vec):
+        self.alpha_std = alpha_std
+        self.eig_val = torch.as_tensor(eig_val, dtype=torch.float).view(1, 3)
+        self.eig_vec = torch.as_tensor(eig_vec, dtype=torch.float)
+
+    def __call__(self, data):
+        if self.alpha_std == 0:
+            return data
+        alpha = torch.empty(1, 3).normal_(0, self.alpha_std)
+        rgb = ((self.eig_vec * alpha) * self.eig_val).sum(1)
+        data += rgb.view(3, 1, 1)
+        data /= 1. + self.alpha_std
+        return data
+
+
+def get_transforms():
+    mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+    transformations = {}
+    transformations['train'] = transforms.Compose([
+        transforms.RandomResizedCrop(TRAIN_IMAGE_SIZE),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        Lighting(0.1, np.array(EIGENVALUES), np.array(EIGENVECTORS)),
+        transforms.Normalize(mean, std),
+    ])
+    transformations['val'] = transforms.Compose(
+        [Resize(TEST_IMAGE_SIZE),
+        transforms.CenterCrop(TRAIN_IMAGE_SIZE),
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std)])
+    return transformations
+
+
+def get_transforms_fixres(kind='full', crop=True, finetune=True):
+    mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+    transformations = {}
+    # train transforms
+    if finetune:
+        transformations['train'] = transforms.Compose(
+            [Resize(int((256 / 224) * TEST_IMAGE_SIZE)),  # to maintain same ratio w.r.t. 224 images
+             transforms.RandomHorizontalFlip(),
+             transforms.ColorJitter(0.05, 0.05, 0.05),
+             CenterCrop(TEST_IMAGE_SIZE),
+             transforms.ToTensor(),
+             transforms.Normalize(mean, std)])
     else:
-        w_new = int(math.floor((float(w) / h) * size))
-    im = cv2.resize(im, (w_new, h_new), interpolation=cv2.INTER_LINEAR)
-    return im.astype(np.float32)
+        if kind == 'torch':
+            transformations['train'] = transforms.Compose([
+                transforms.RandomResizedCrop(TRAIN_IMAGE_SIZE),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                Lighting(0.1, np.array(EIGENVALUES), np.array(EIGENVECTORS)),
+                transforms.Normalize(mean, std),
+            ])
+        elif kind == 'full':
+            transformations['train'] = transforms.Compose([
+                transforms.RandomResizedCrop(TRAIN_IMAGE_SIZE),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.3, 0.3, 0.3),
+                transforms.ToTensor(),
+                Lighting(0.1, np.array(EIGENVALUES), np.array(EIGENVECTORS)),
+                transforms.Normalize(mean, std),
+            ])
+        else:
+            raise ValueError('Transforms kind {} unknown'.format(kind))
 
-
-def center_crop(size, im):
-    """Performs center cropping (HWC format)."""
-    h, w = im.shape[:2]
-    y = int(math.ceil((h - size) / 2))
-    x = int(math.ceil((w - size) / 2))
-    im_crop = im[y : (y + size), x : (x + size), :]
-    assert im_crop.shape[:2] == (size, size)
-    return im_crop
-
-
-def random_sized_crop(im, size, area_frac=0.08, max_iter=10):
-    """Performs Inception-style cropping (HWC format)."""
-    h, w = im.shape[:2]
-    area = h * w
-    for _ in range(max_iter):
-        target_area = np.random.uniform(area_frac, 1.0) * area
-        aspect_ratio = np.random.uniform(3.0 / 4.0, 4.0 / 3.0)
-        w_crop = int(round(math.sqrt(float(target_area) * aspect_ratio)))
-        h_crop = int(round(math.sqrt(float(target_area) / aspect_ratio)))
-        if np.random.uniform() < 0.5:
-            w_crop, h_crop = h_crop, w_crop
-        if h_crop <= h and w_crop <= w:
-            y = 0 if h_crop == h else np.random.randint(0, h - h_crop)
-            x = 0 if w_crop == w else np.random.randint(0, w - w_crop)
-            im_crop = im[y : (y + h_crop), x : (x + w_crop), :]
-            assert im_crop.shape[:2] == (h_crop, w_crop)
-            im_crop = cv2.resize(im_crop, (size, size), interpolation=cv2.INTER_LINEAR)
-            return im_crop.astype(np.float32)
-    return center_crop(size, scale(size, im))
-
-
-def lighting(im, alpha_std, eig_val, eig_vec):
-    """Performs AlexNet-style PCA jitter (CHW format)."""
-    if alpha_std == 0:
-        return im
-    alpha = np.random.normal(0, alpha_std, size=(1, 3))
-    rgb = np.sum(
-        eig_vec * np.repeat(alpha, 3, axis=0) * np.repeat(eig_val, 3, axis=0), axis=1
-    )
-    for i in range(im.shape[0]):
-        im[i] = im[i] + rgb[2 - i]
-    return im
+    # val transforms
+    if crop:
+        transformations['val'] = transforms.Compose(
+            [Resize(int((256 / 224) * TEST_IMAGE_SIZE)),  # to maintain same ratio w.r.t. 224 images
+             transforms.CenterCrop(TEST_IMAGE_SIZE),
+             transforms.ToTensor(),
+             transforms.Normalize(mean, std)])
+    else:
+        transformations['val'] = transforms.Compose(
+            [Resize(TEST_IMAGE_SIZE, largest=True), 
+             transforms.ToTensor(),
+             transforms.Normalize(mean, std)])
+        
+    return transformations
