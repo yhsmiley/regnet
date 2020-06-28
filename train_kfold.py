@@ -23,7 +23,13 @@ from collections import OrderedDict
 import torch.backends.cudnn as cudnn
 
 from sklearn.model_selection import StratifiedKFold
-from torch.utils.data import SubsetRandomSampler
+from torch.utils.data import SubsetRandomSampler, WeightedRandomSampler
+from torchvision.datasets import ImageFolder
+from src.dataset_map import MapDataset
+from src.dataset_subset import MySubset
+from src.dataset_concat import MyConcatDataset
+
+from src.transforms_kfold import *
 
 
 def get_args():
@@ -91,16 +97,21 @@ def main(opt):
     cudnn.benchmark = True
 
     training_params = {"batch_size": opt.batch_size * num_gpus,
-                       "shuffle": True,
                        "drop_last": True,
                        "num_workers": 6}
 
     test_params = {"batch_size": opt.batch_size//10,
-                   "shuffle": False,
                    "drop_last": False,
                    "num_workers": 6}
 
-    all_train_set = Imagenet(root_dir=opt.data_path, mode="train")
+    train_set = ImageFolder(root=os.path.join(opt.data_path, 'train'))
+    val_set = ImageFolder(root=os.path.join(opt.data_path, 'val'))
+    all_train_set = MyConcatDataset([train_set, val_set])
+
+    if opt.fixres:
+        transformations = get_transforms_fixres(kind='full', crop=True, finetune=True)
+    else:
+        transformations = get_transforms()
 
     if os.path.isdir(opt.log_path):
         shutil.rmtree(opt.log_path)
@@ -146,11 +157,16 @@ def main(opt):
     for i, (train_idx, val_idx) in enumerate(kfold.split(all_train_set, all_train_set.targets)):
         print('which fold: {}'.format(i))
 
-        train_set = torch.utils.data.Subset(all_train_set, train_idx)
-        training_generator = DataLoader(train_set, collate_fn=collate_fn, **training_params)
+        # use weighted sampling for training
+        train_subset = MySubset(all_train_set, train_idx)
+        train_sampler = WeightedRandomSampler(train_subset.image_weights, len(train_subset.image_weights))
+        train_set = MapDataset(all_train_set, transformations['train'])
+        training_generator = DataLoader(train_set, collate_fn=collate_fn, sampler=train_sampler, **training_params)
 
-        val_set = torch.utils.data.Subset(all_train_set, val_idx)
-        val_generator = DataLoader(val_set, collate_fn=collate_fn, **test_params)
+        # validation no need weighted
+        val_sampler = SubsetRandomSampler(val_idx)
+        val_set = MapDataset(all_train_set, transformations['val'])
+        val_generator = DataLoader(val_set, collate_fn=collate_fn, sampler=val_sampler, **test_params)
 
         for epoch in range(opt.epochs):
             epoch = restore_epoch + (opt.epochs*i) + epoch
@@ -176,6 +192,23 @@ def main(opt):
                     "best_acc1": best_acc1,
                     "optimizer": optimizer.state_dict(),
                 }, is_best, opt.saved_path)
+
+            if (epoch+1) % 10 == 0:
+                if opt.apex:
+                    save_checkpoint({
+                        "epoch": epoch + 1,
+                        "state_dict": model.state_dict(),
+                        "best_acc1": best_acc1,
+                        "optimizer": optimizer.state_dict(),
+                        "amp": amp.state_dict(),
+                    }, False, opt.saved_path, filename="ckpt/apex_checkpoint_epoch{}.pth.tar".format(epoch+1))
+                else:
+                    save_checkpoint({
+                        "epoch": epoch + 1,
+                        "state_dict": model.state_dict(),
+                        "best_acc1": best_acc1,
+                        "optimizer": optimizer.state_dict(),
+                    }, False, opt.saved_path, filename="ckpt/checkpoint_epoch{}.pth.tar".format(epoch+1))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, writer, opt):
@@ -346,10 +379,5 @@ if __name__ == "__main__":
 
     if opt.apex:
         from apex import amp
-
-    if opt.fixres:
-        from src.dataset_fixres import Imagenet
-    else:
-        from src.dataset import Imagenet
 
     main(opt)
